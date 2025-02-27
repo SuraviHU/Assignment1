@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Advanced Spreadsheet</title>
+    <style>
+        body { font-family: sans-serif; }
+        table { border-collapse: collapse; width: 100%; }
+        table, th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .formula-bar { width: 98%; padding: 8px; margin-bottom: 10px; }
+        .selected { background-color: lightblue; }
+        .toolbar { margin-bottom: 10px; }
+        .toolbar button { padding: 8px 12px; margin-right: 5px; }
+        .resize-handle { position: absolute; background: #999; width: 5px; height: 100%; right: 0; top: 0; cursor: col-resize; }
+        .row-resize-handle { position: absolute; background: #999; height: 5px; width: 100%; bottom: 0; left: 0; cursor: row-resize; }
+        td {position: relative;}
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <button onclick="addRow()">Add Row</button>
+        <button onclick="addColumn()">Add Column</button>
+        <button onclick="removeDuplicates()">Remove Duplicates</button>
+        <button onclick="findAndReplacePrompt()">Find & Replace</button>
+        <button onclick="bold()">Bold</button>
+        <button onclick="italic()">Italic</button>
+    </div>
+    <input type="text" id="formula-bar" class="formula-bar">
+    <div id="spreadsheet"></div>
+
+    <script>
+        const spreadsheet = document.getElementById('spreadsheet');
+        const formulaBar = document.getElementById('formula-bar');
+        let data = {};
+        let selectedCells = [];
+        let rows = 26;
+        let cols = 26;
+
+        function createTable() {
+            let table = '<table><tr><th></th>';
+            for (let i = 0; i < cols; i++) {
+                table += `<th>${String.fromCharCode(65 + i)}</th>`;
+            }
+            table += '</tr>';
+            for (let i = 1; i <= rows; i++) {
+                table += `<tr><th>${i}</th>`;
+                for (let j = 0; j < cols; j++) {
+                    const cellId = `${String.fromCharCode(65 + j)}${i}`;
+                    table += `<td id="${cellId}" contenteditable="true" data-row="${i}" data-col="${j}"></td>`;
+                }
+                table += '</tr>';
+            }
+            table += '</table>';
+            spreadsheet.innerHTML = table;
+            addEventListeners();
+            addResizeHandles();
+        }
+
+        function addResizeHandles(){
+          const headers = document.querySelectorAll('th');
+          headers.forEach(header => {
+            if(header.textContent){
+              const resizeHandle = document.createElement('div');
+              resizeHandle.classList.add('resize-handle');
+              header.style.position = 'relative';
+              header.appendChild(resizeHandle);
+              addResizeListener(header, resizeHandle);
+            }
+          });
+          const rowHeaders = document.querySelectorAll('tr th:first-child');
+          rowHeaders.forEach(header => {
+            if(header.textContent){
+              const resizeHandle = document.createElement('div');
+              resizeHandle.classList.add('row-resize-handle');
+              header.style.position = 'relative';
+              header.appendChild(resizeHandle);
+              addRowResizeListener(header, resizeHandle);
+            }
+          });
+        }
+
+        function addResizeListener(header, resizeHandle) {
+            let isResizing = false;
+            let startX;
+            let startWidth;
+
+            resizeHandle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startX = e.clientX;
+                startWidth = header.offsetWidth;
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const newWidth = startWidth + (e.clientX - startX);
+                header.style.width = `${newWidth}px`;
+                const colIndex = header.cellIndex;
+                const rows = spreadsheet.querySelectorAll('tr');
+                rows.forEach(row => {
+                    const cell = row.cells[colIndex];
+                    if (cell) cell.style.width = `${newWidth}px`;
+                });
+            });
+
+            document.addEventListener('mouseup', () => {
+                if(isResizing) isResizing = false;
+            });
+        }
+
+        function addRowResizeListener(header, resizeHandle) {
+            let isResizing = false;
+            let startY;
+            let startHeight;
+
+            resizeHandle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startY = e.clientY;
+                startHeight = header.offsetHeight;
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const newHeight = startHeight + (e.clientY - startY);
+                header.style.height = `${newHeight}px`;
+                const rowIndex = header.parentElement.rowIndex;
+                const cells = spreadsheet.querySelectorAll(`tr:nth-child(${rowIndex + 1}) td`);
+                cells.forEach(cell => cell.style.height = `${newHeight}px`);
+
+            });
+
+            document.addEventListener('mouseup', () => {
+                if(isResizing) isResizing = false;
+            });
+        }
+
+        function addEventListeners() {
+            const cells = document.querySelectorAll('td');
+            cells.forEach(cell => {
+                cell.addEventListener('input', () => updateCell(cell.id, cell.textContent));
+                cell.addEventListener('click', (e) => {
+                  if (e.shiftKey) {
+                    selectRange(e.target);
+                  } else {
+                    selectCell(e.target);
+                  }
+
+                });
+                cell.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.setData('text/plain', cell.id);
+                });
+                cell.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                });
+                cell.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    const sourceId = e.dataTransfer.getData('text/plain');
+                    const targetId = cell.id;
+                    dragAndDrop(sourceId, targetId);
+                });
+            });
+            formulaBar.addEventListener('input', () => {
+                if (selectedCells.length === 1) {
+                    updateCell(selectedCells[0], formulaBar.value);
+                }
+            });
+        }
+        function selectCell(cell) {
+            selectedCells = [cell.id];
+            updateSelection();
+            formulaBar.value = data[cell.id] || '';
+        }
+
+        function selectRange(cell) {
+          const startCell = selectedCells[0] || cell.id;
+          const endCell = cell.id;
+
+          const startCol = startCell.charCodeAt(0);
+          const startRow = parseInt(startCell.slice(1));
+          const endCol = endCell.charCodeAt(0);
+          const endRow = parseInt(endCell.slice(1));
+
+          selectedCells = [];
+          for (let col = Math.min(startCol, endCol); col <= Math.max(startCol, endCol); col++) {
+            for (let row = Math.min(startRow, endRow); row <= Math.max(startRow, endRow); row++) {
+              selectedCells.push(String.fromCharCode(col) + row);
+            }
+          }
+          updateSelection();
+        }
+
+        function updateSelection() {
+            document.querySelectorAll('td').forEach(c => c.classList.remove('selected'));
+            selectedCells.forEach(cellId => {
+                const cell = document.getElementById(cellId);
+                if (cell) {
+                    cell.classList.add('selected');
+                }
+            });
+        }
+
+        function updateCell(cellId, value) {
+            data[cellId] = value;
+            if (value.startsWith('=')) {
+                try {
+                    const result = evaluateFormula(value.substring(1));
+                    document.getElementById(cellId).textContent = result;
+                    data[cellId] = result;
+                } catch (e) {
+                    document.getElementById(cellId).textContent = '#ERROR';
+                }
+            } else {
+                document.getElementById(cellId).textContent = value;
+                    }
+        }
+
+        function addResizeHandles(){
+          const headers = document.querySelectorAll('th');
+          headers.forEach(header => {
+            if(header.textContent){
+              const resizeHandle = document.createElement('div');
+              resizeHandle.classList.add('resize-handle');
+              header.style.position = 'relative';
+              header.appendChild(resizeHandle);
+              addResizeListener(header, resizeHandle);
+            }
+          });
+          const rowHeaders = document.querySelectorAll('tr th:first-child');
+          rowHeaders.forEach(header => {
+            if(header.textContent){
+              const resizeHandle = document.createElement('div');
+              resizeHandle.classList.add('row-resize-handle');
+              header.style.position = 'relative';
+              header.appendChild(resizeHandle);
+              addRowResizeListener(header, resizeHandle);
+            }
+          });
+        }
+
+        function addResizeListener(header, resizeHandle) {
+            let isResizing = false;
+            let startX;
+            let startWidth;
+
+            resizeHandle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startX = e.clientX;
+                startWidth = header.offsetWidth;
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const newWidth = startWidth + (e.clientX - startX);
+                header.style.width = `${newWidth}px`;
+                const colIndex = header.cellIndex;
+                const rows = spreadsheet.querySelectorAll('tr');
+                rows.forEach(row => {
+                    const cell = row.cells[colIndex];
+                    if (cell) cell.style.width = `${newWidth}px`;
+                });
+            });
+
+            document.addEventListener('mouseup', () => {
+                if(isResizing) isResizing = false;
+            });
+        }
+
+        function addRowResizeListener(header, resizeHandle) {
+            let isResizing = false;
+            let startY;
+            let startHeight;
+
+            resizeHandle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startY = e.clientY;
+                startHeight = header.offsetHeight;
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                const newHeight = startHeight + (e.clientY - startY);
+                header.style.height = `${newHeight}px`;
+                const rowIndex = header.parentElement.rowIndex;
+                const cells = spreadsheet.querySelectorAll(`tr:nth-child(${rowIndex + 1}) td`);
+                cells.forEach(cell => cell.style.height = `${newHeight}px`);
+
+            });
+
+            document.addEventListener('mouseup', () => {
+                if(isResizing) isResizing = false;
+            });
+        }
+
+        function addRow() {
+            rows++;
+            createTable();
+        }
+
+        function addColumn() {
+            cols++;
+            createTable();
+        }
+
+        function findAndReplacePrompt() {
+            const find = prompt("Find:");
+            const replace = prompt("Replace:");
+            if (find && replace) {
+                findAndReplace(find, replace);
+            }
+        }
+
+        function findAndReplace(find, replace) {
+            for (const cellId in data) {
+                if (typeof data[cellId] === 'string' && data[cellId].includes(find)) {
+                    data[cellId] = data[cellId].replace(find, replace);
+                    document.getElementById(cellId).textContent = data[cellId];
+                }
+            }
+        }
+
+        function bold() {
+            selectedCells.forEach(cellId => {
+                const cell = document.getElementById(cellId);
+                if (cell) {
+                    cell.style.fontWeight = cell.style.fontWeight === 'bold' ? 'normal' : 'bold';
+                }
+            });
+        }
+
+        function italic() {
+            selectedCells.forEach(cellId => {
+                const cell = document.getElementById(cellId);
+                if (cell) {
+                    cell.style.fontStyle = cell.style.fontStyle === 'italic' ? 'normal' : 'italic';
+                }
+            });
+        }
+        createTable();
+    </script>
+</body>
+</html>
